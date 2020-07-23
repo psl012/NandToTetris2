@@ -1,7 +1,7 @@
 import os
 import glob
 
-folder_directory = "C:/Users/Paul/Documents/Open Source Society for Computer Science (OSSU)/nand2tetris/projects/11/CompileFolder"
+folder_directory = "C:/Users/lacap/Desktop/Paul-Der/Open Source CompSci/nand2tetris/projects/11/CompileFolder"
 jack_file_directory = folder_directory + "/*.jack"
 xml_directory = folder_directory + "/*.xml"
 
@@ -828,15 +828,14 @@ class JackCompiler:
 
         # End of return Statement---------------------------------------
 
+    # Master level means it is not coming from term but it is an expression of itself
     def compile_expression(self, c_sc, master_level=True):
         self.jack_array.append(' ' * c_sc + '<expression>')  # <Expression>
         sc = c_sc + 2
 
-        # VM translation beginning checkpoint
-        if master_level:
-            expression_beginning = len(self.jack_array) - 1
+        expression_beginning = len(self.jack_array) - 1
 
-        # term : compile term
+        # term : compile term: Note term calling expression will have master_level set to false
         self.compile_term(sc)
 
         # (op term)* will keep repeating as long as there is a term----------
@@ -863,14 +862,11 @@ class JackCompiler:
         # end of Expression---------------------------------------------------------
 
         # Start of the VM_Translation----------------------------------------------
-        # Check if the current expression is master level or it is just part of a bigger expression to prevent double
-        # counting from other expression calls in the bigger picture
+        # If the current expression is master level then vm translation can be used
         if master_level:
-            # Initialize the given array to make it easier to translate by removing unnecessary tags
             initialize_array = self.expression_array_vm_initialize(self.jack_array[expression_beginning:])
-          #  self.token_part_viewer(self.jack_array,expression_beginning) #View the array using this for debugging
-            # Starts the actual VM translation
-            self.expression_vm_translator(initialize_array[1:-1])
+            self.expression_vm_translator(initialize_array)
+        # counting from other expression calls in the bigger picture
 
     def expression_array_vm_initialize(self, jack_array, output=[]):
         """Initialize the expression section of the token xml file for vm translation"""
@@ -899,37 +895,49 @@ class JackCompiler:
 
         return token_holder
 
-    def expression_vm_translator(self, exp_arr, arr_ind=0, branch=False):
+    def expression_vm_translator(self, exp_arr, arr_ind=0):
         """The official VM translator for Expressions"""
+
+        def evaluate_operator(op):
+            if op == '+':
+                self.write_arithmetic('ADD')
+            elif op == '*':
+                self.write_call('Math.multiply', '2')
+
         # Expression is a Number
-        if exp_arr[arr_ind][0] == '<integerConstant>' and len(exp_arr) == 1:
-            self.write_push('CONST', exp_arr[0][1])
+        if exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind+1][0] == '<integerConstant>' and exp_arr[arr_ind+2][0] == '</expression>':
+            self.write_push('CONST', exp_arr[1][1])
 
         # Expression is Exp1 Op Exp2
         elif len(exp_arr) >= 3:
-            if (exp_arr[arr_ind][0] == '<integerConstant>' and exp_arr[arr_ind + 1][0] == '<symbol>' and
-                    (exp_arr[arr_ind + 2][0] == '<integerConstant>' or exp_arr[arr_ind + 2][0] == '<expression>')):
-                exp1 = [exp_arr[arr_ind]]
-                exp2 = exp_arr[arr_ind+2:]
-                op = exp_arr[arr_ind+1]
+            # Exp1 Op Compound_Exp2: For cases like: 2 + (1 - 43)
+            if exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind+2][0] == '<symbol>' and exp_arr[arr_ind+3][0] == '<expression>':
+                # Expression 1
+                exp1 = exp_arr[arr_ind:2]
+                exp1.append(('</expression>', 'n/a'))
                 self.expression_vm_translator(exp1)
 
-                # Checks to see if exp2 is also a compounded expression
-                if exp2[0][0] == '<expression>':
-                    self.expression_vm_translator(exp2[1:-1])
-                # Expression to is just a simple expression (like a constant integer)
-                else:
-                    self.expression_vm_translator(exp2)
+                # Expression 2
+                compound_exp2 = exp_arr[arr_ind+3:-1]
+                self.expression_vm_translator(compound_exp2)
 
-                # Writes the operation symbol based on the VM algorithm
+                # output "op"
+                op = exp_arr[arr_ind + 2][1]
+                evaluate_operator(op)
 
-                # A function called Math.multiply is already given for us
-                if op[1] == '*':
-                    self.write_call('Math.multiply', exp1[0][1])
+            # Exp1 Op Exp2
+            elif exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind+2][0] == '<symbol>' and exp_arr[arr_ind+3][0] == '<integerConstant>':
+                # Expression 1
+                exp1 = exp_arr[arr_ind:2] + [('</expression>', 'n/a')]
+                self.expression_vm_translator(exp1)
 
-                # Standard Adding
-                elif op[1] == '+':
-                    self.write_arithmetic('ADD')
+                # Expression 2
+                exp2 = [('<expression>', 'n/a')] + exp_arr[arr_ind + 3:]
+                self.expression_vm_translator(exp2)
+
+                # output 'op'
+                op = exp_arr[arr_ind + 2][1]
+                evaluate_operator(op)
 
     def token_part_viewer(self, jack_array, array_index=0):
         """View the current jack array: use expression_beginning for array_index"""
@@ -973,7 +981,7 @@ class JackCompiler:
 
                 # expression
                 self.advance()
-                self.compile_expression(sc)
+                self.compile_expression(sc, False)
 
                 # ] : <symbol> ] </symbol>
                 self.advance()
@@ -1035,7 +1043,7 @@ class JackCompiler:
             self.jack_array.append(' ' * c_sc + self.current_token)
 
             # expressionList ------------------------------------
-            exp_count = self.call_expression_list(c_sc)
+            exp_count = self.call_expression_list(c_sc, subroutine_name)
             # /expressionList-----------------------------------
 
             # ) symbol
@@ -1060,34 +1068,32 @@ class JackCompiler:
             self.jack_array.append(' ' * c_sc + self.current_token)
 
             # expressionList ------------------------------------
-            exp_count = self.call_expression_list(c_sc)
+            exp_count = self.call_expression_list(c_sc, subroutine_name)
             # /expressionList-----------------------------------
 
             # ) : <symbol> ) </symbol>
             self.advance()
             self.jack_array.append(' ' * c_sc + self.current_token)
 
-            # This is where we will put the Call VM translation: I hope
-            self.write_call(subroutine_name, exp_count)
 
             # Note for July 9 Paul: Basically try to apply the logic you used here in Subroutine Call to
             # all the routines
 
     # End of Subroutine Call-----------------------------------
 
-    def call_expression_list(self, c_sc):
+    def call_expression_list(self, c_sc, subroutine_name=''):
         # Holds the exp_count coming from expression_list
         exp_count_holder = 0
 
         if self.check_token(1, '<symbol> ) </symbol>'):
-            exp_count_holder = self.compile_expression_list(c_sc)
+            exp_count_holder = self.compile_expression_list(c_sc, subroutine_name)
         else:
             self.advance()
-            exp_count_holder = self.compile_expression_list(c_sc)
+            exp_count_holder = self.compile_expression_list(c_sc, subroutine_name)
 
         return str(exp_count_holder)
 
-    def compile_expression_list(self, c_sc=0):
+    def compile_expression_list(self, c_sc=0, subroutine_name=''):
         self.jack_array.append(' ' * c_sc + '<expressionList>')  # <expressionList>
         sc = c_sc + 2
 
@@ -1098,6 +1104,7 @@ class JackCompiler:
         # token itself. When current token is ( then there is no expression
 
         # There is an expression
+        # NOte this expression list stands for f(exp1, exp2, exp3, etc)
         if not self.check_token(0, '<symbol> ( </symbol>') or not self.check_token(1, '<symbol> ) </symbol>'):
             # expression Initial
             self.compile_expression(sc)
@@ -1116,6 +1123,8 @@ class JackCompiler:
 
         # End of expression List
         self.jack_array.append(' ' * c_sc + '</expressionList>')  # </expressionList>
+
+        self.write_call(subroutine_name, str(exp_count))
 
         return exp_count
         # End of Expression List-----------------------------------------------------------
