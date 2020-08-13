@@ -1,7 +1,7 @@
 import os
 import glob
 
-folder_directory = "C:/Users/lacap/Desktop/Paul-Der/Open Source CompSci/nand2tetris/projects/11/CompileFolder"
+folder_directory = "C:/Users/lacap/Desktop/Paul-Der/Open Source CompSci/nand2tetris/projects/11/CompileFolder/ConvertToBin"
 jack_file_directory = folder_directory + "/*.jack"
 xml_directory = folder_directory + "/*.xml"
 
@@ -337,8 +337,6 @@ class JackCompiler:
             else:
                 print("ERROR!!! A jack compiler must always have a class as it's first token!!!")
         self.symbol_table.print_class_tables()
-        print("VM TRANSLATION------------------------------------------")
-        [print(vm_code) for vm_code in self.vm_table]
 
     def has_more_tokens(self):
         if self.token_array[self.token_index + 1] == "</tokens>":
@@ -434,30 +432,43 @@ class JackCompiler:
         # End of ClassVarDec-------------------------------------------------------------
 
     def compile_subroutine(self, c_sc):
+        # VM Code Counts
+        self.while_count_start = -1
+        self.while_count_end = -1
+        self.if_count = -1
+        self.if_count_true = -1
+        self.if_count_false = -1
+
         # c_sc is the caller's space_counter
         self.jack_array.append(' ' * c_sc + '<subroutineDec>')  # <SubroutineDec>
         sc = c_sc + 2
         # Holds if function is void or have a return value
         function_type = 'placeholder'
+        # Holds the number of local variable count
+        local_variable_count = 0
 
         # Construction|Function|Method: <keyword> function </keyword>
         self.jack_array.append(' ' * sc + self.current_token)
+        # If it the subroutine is a method therefore an argument 0 called "this" must be automatically put
+        if self.current_token == '<keyword> method </keyword>':
+            self.symbol_table.start_subroutine('', ('this', self.class_name, 'ARGUMENT'), True)
+        else:
+            self.symbol_table.start_subroutine('', ('this', self.class_name, 'ARGUMENT'), False)
 
         # void | Type: <keyword> void </keyword>
         self.advance()
         self.jack_array.append(' ' * sc + self.current_token)
-        function_type = self.current_token
+        self.subroutine_type = self.current_token
+
 
         # subroutineName: <identifier> main </identifier> SymbolTable Entry No need but restart subroutine table
         self.advance()
         self.jack_array.append(' ' * sc + self.current_token)
-        self.symbol_table.start_subroutine('', ('this', self.class_name, 'ARGUMENT'))
 
         # VM Translation
-        # Remove the tags
+        # Set the variable for the VM translator function after counting the number of local argument at the var dec
         f_class_name = self.class_name[13:-14]
         f_class_subroutine = self.current_token[13:-14]
-        self.write_function(f_class_name + '.' + f_class_subroutine, '0')
 
         # (: <symbol> ( </symbol>
         self.advance()
@@ -485,7 +496,9 @@ class JackCompiler:
         # VarDec: Can REPEAT
         while self.check_token(1, '<keyword> var </keyword>'):
             self.advance()
-            self.compile_var_dec(i_sc)
+            local_variable_count += self.compile_var_dec(i_sc)
+
+        self.write_function(f_class_name + '.' + f_class_subroutine, str(local_variable_count))
 
         # Statements---------------------------------------------------------
         self.advance()
@@ -558,11 +571,13 @@ class JackCompiler:
     def compile_var_dec(self, c_sc):
         self.jack_array.append(' ' * c_sc + '<varDec>')  # <varDec>
         sc = c_sc + 2
+        local_variable_count = 0
 
         # 'var': <keyword> var </keyword>
         self.jack_array.append(' ' * sc + self.current_token)
         # SymbolTable Input: Kind
-        sym_kind = self.current_token
+        sym_kind = 'LOCAL'
+        #print(sym_kind)
 
         # type : <identifier> SquareGame </identifier> SymbolTable Entry
         self.advance()
@@ -582,6 +597,7 @@ class JackCompiler:
 
         # SymbolTable Input:
         self.symbol_table.define(sym_name, sym_type, sym_kind)
+        local_variable_count += 1
 
         while self.check_token(1, '<symbol> , </symbol>'):
             # comma :
@@ -598,21 +614,23 @@ class JackCompiler:
 
             # SymbolTable Input:
             self.symbol_table.define(sym_name, sym_type, sym_kind)
+            local_variable_count += 1
 
         # ; <symbol> ; </symbol>
         self.advance()
         self.jack_array.append(' ' * sc + self.current_token)
 
         self.jack_array.append(' ' * c_sc + '</varDec>')  # </varDec>
+        return local_variable_count
         # end of var-dec-------------------------------------------------------------
 
     # this is put top because this is confusing as hell
-    def compile_statements(self, c_sc, subroutine_type='void'):
+    def compile_statements(self, c_sc):
         self.jack_array.append(' ' * c_sc + '<statements>')  # <Statements>
         sc = c_sc + 2
 
         # Initial Check statement so no self.advance is needed (parallel to other compile functions)
-        self.check_statement(sc, subroutine_type)
+        self.check_statement(sc)
 
         # Recursion: statements*
         while self.check_token(1, '<keyword> let </keyword>', '<keyword> do </keyword>',
@@ -637,7 +655,7 @@ class JackCompiler:
         # Check if the statement is a return statement
         elif self.current_token == '<keyword> return </keyword>':
             # VM translation: End of a function
-            if subroutine_type == 'void':
+            if self.subroutine_type == '<keyword> void </keyword>':
                 self.write_push('CONST', '0')
             self.compile_return_statement(c_sc)
 
@@ -652,6 +670,7 @@ class JackCompiler:
     def compile_let_statement(self, c_sc):
         self.jack_array.append(' ' * c_sc + '<letStatement>')  # <Statements: letStatement>
         sc = c_sc + 2
+        symbol_index = 'PLACEHOLDER'
 
         # 'let': '<keyword> let </keyword>'
         self.jack_array.append(' ' * sc + self.current_token)
@@ -660,11 +679,15 @@ class JackCompiler:
         self.advance()
 
         # <identifier>----------------------------------------------------
-        # varName
+        # varName REPLACE THIS WITH SEARCHING THE VM TABLE
         if self.symbol_table.is_var_defined(self.current_token):
             self.jack_array.append(' ' * sc + self.current_token)
-            # Store the varName
-            self.var_names.append(self.current_token)
+
+            # Get the varName VM TRANSLATION
+            if not self.symbol_table.index_of(self.current_token) == 'NONE':
+                symbol_type = self.symbol_table.kind_of(self.current_token)
+                symbol_index = str(self.symbol_table.index_of(self.current_token))
+
         # </identifier> -------------------------------------------------
 
         # check if it has [expression]--------------------------------
@@ -695,9 +718,19 @@ class JackCompiler:
         self.jack_array.append(' ' * sc + self.current_token)
 
         self.jack_array.append(' ' * c_sc + '</letStatement>')  # <Statements>
+
+        # Start of VM translation
+        if not symbol_index == 'PLACEHOLDER':
+            self.write_pop(symbol_type, symbol_index)
         # end of Let Statement-----------------------------------
 
+    # Wait lagpas ka na pala doon :/
+
     def compile_if_statement(self, c_sc=0):
+        # If counter IT REPEATS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        self.if_count += 1
+        if_count = self.if_count
+
         self.jack_array.append(' ' * c_sc + '<ifStatement>')  # <Statements: ifStatement>
         sc = c_sc + 2
 
@@ -720,6 +753,16 @@ class JackCompiler:
         self.advance()
         self.jack_array.append(' ' * sc + self.current_token)
 
+        # if statement is True
+        # Command on where to go if statement is true
+        self.write_if('IF_TRUE' + str(if_count))
+        # Command on where to go if statement is false
+        self.if_count_false += 1
+        self.write_goto('IF_FALSE' + str(if_count))
+
+        # True Statement
+        self.write_label('IF_TRUE' + str(if_count))
+
         # statements
         self.advance()
         self.compile_statements(sc)
@@ -728,8 +771,14 @@ class JackCompiler:
         self.advance()
         self.jack_array.append(' ' * sc + self.current_token)
 
+        self.write_goto('IF_END' + str(if_count))
+        # end of the True statement
+
         # Check if there is an Else Statement
         if self.check_token(1, '<keyword> else </keyword>'):
+            # False Statement
+            self.write_label('IF_FALSE' + str(if_count))
+
             # else: <keyword> else </keyword>
             self.advance()
             self.jack_array.append(' ' * sc + self.current_token)
@@ -745,14 +794,26 @@ class JackCompiler:
             # } : <symbol> } </symbol>
             self.advance()
             self.jack_array.append(' ' * sc + self.current_token)
+            # End of Else Statement
 
+        self.write_label('IF_END' + str(if_count))
         self.jack_array.append(' ' * c_sc + '</ifStatement>')
-
         # end of ifStatement----------------------------------------------
 
     def compile_while_statement(self, c_sc=0):
+        # If counter !!!
+       # self.if_count += 1
+
         self.jack_array.append(' ' * c_sc + '<whileStatement>')  # <Statements: whileStatement>
         sc = c_sc + 2
+        # While counter
+        self.while_count_start += 1
+        self.while_count_end += 1
+
+        # Start of VM Translation
+        # Label
+        while_start_label = 'WHILE_EXP' + str(self.while_count_start)
+        self.write_label(while_start_label)
 
         # while keyword <keyword> while </keyword>
         self.jack_array.append(' ' * sc + self.current_token)
@@ -761,9 +822,12 @@ class JackCompiler:
         self.advance()
         self.jack_array.append(' ' * sc + self.current_token)
 
-        # expression
+        # expression THe boolean statement to determine if to loop or not
         self.advance()
         self.compile_expression(sc)
+
+        # VM Translation: As per instruction the condition must always be negated
+        self.write_arithmetic('NOT')
 
         # ) : <symbol> ) </symbol>
         self.advance()
@@ -773,6 +837,10 @@ class JackCompiler:
         self.advance()
         self.jack_array.append(' ' * sc + self.current_token)
 
+        # Checks the boolean obtained before Then if it is false loop if true end loop (yeah it's kindda reverse)
+        while_end_label = 'WHILE_END' + str(self.while_count_start)
+        self.write_if(while_end_label)
+
         # statements
         self.advance()
         self.compile_statements(sc)
@@ -781,8 +849,13 @@ class JackCompiler:
         self.advance()
         self.jack_array.append(' ' * sc + self.current_token)
 
+        # The end of while statement will always go back the start of the while statement for checking for the loop again
+        self.write_goto('WHILE_EXP' + str(self.while_count_start))
+        self.write_label('WHILE_END' + str(self.while_count_start))
+
         self.jack_array.append(' ' * c_sc + '</whileStatement>')  # <EndOfStatements: whileStatement>
         # End of While Statement------------------------------------------------------------------------------
+
 
     def compile_do_statement(self, c_sc=0):
         self.jack_array.append(' ' * c_sc + '<doStatement>')  # <Statements: doStatement>
@@ -793,13 +866,16 @@ class JackCompiler:
 
         # Subroutine Call:
         self.advance()
-        self.og_compile_subroutine_call(sc)
+        sub_tuple =  self.og_compile_subroutine_call(sc)
 
         # ; : <symbol> ; </symbol>
         self.advance()
         self.jack_array.append(' ' * sc + self.current_token)
 
         self.jack_array.append(' ' * c_sc + '</doStatement>')  # <Statements: doStatement>
+
+        # VM STATEMENT the call function for do can just be declared here: no need for expression to handle it
+        self.write_call(sub_tuple[0], sub_tuple[1])
 
         # VM For do statement we always need to put the pop temp 0
         self.write_pop('TEMP', '0')
@@ -828,6 +904,53 @@ class JackCompiler:
 
         # End of return Statement---------------------------------------
 
+    def call_expression_list(self, c_sc, subroutine_name='', master_level=True):
+        # Holds the exp_count coming from expression_list
+        exp_count_holder = 0
+
+        if self.check_token(1, '<symbol> ) </symbol>'):
+            exp_count_holder = self.compile_expression_list(c_sc, subroutine_name, master_level)
+        else:
+            self.advance()
+            exp_count_holder = self.compile_expression_list(c_sc, subroutine_name, master_level)
+
+        return str(exp_count_holder)
+
+    def compile_expression_list(self, c_sc=0, subroutine_name='', master_level=True):
+        self.jack_array.append(' ' * c_sc + '<expressionList>')  # <expressionList>
+        sc = c_sc + 2
+
+        # Counter for the number of expressions
+        exp_count = 0
+
+        # The caller of this method is always choosing between entering '(' or the expression
+        # token itself. When current token is ( then there is no expression
+
+
+        # There is an expression
+        # NOte this expression list stands for f(exp1, exp2, exp3, etc)
+        if not self.check_token(0, '<symbol> ( </symbol>') or not self.check_token(1, '<symbol> ) </symbol>'):
+            # expression Initial
+            self.compile_expression(sc, master_level)
+            exp_count += 1
+
+            # expression recursion
+            while self.check_token(1, '<symbol> , </symbol>'):
+                # , : <symbol> , </symbol>
+                self.advance()
+                self.jack_array.append(' ' * sc + self.current_token)
+
+                # expression
+                self.advance()
+                self.compile_expression(sc, master_level)
+                exp_count += 1
+
+        # End of expression List
+        self.jack_array.append(' ' * c_sc + '</expressionList>')  # </expressionList>
+
+        return exp_count
+        # End of Expression List-----------------------------------------------------------
+
     # Master level means it is not coming from term but it is an expression of itself
     def compile_expression(self, c_sc, master_level=True):
         self.jack_array.append(' ' * c_sc + '<expression>')  # <Expression>
@@ -848,8 +971,7 @@ class JackCompiler:
             self.advance()
             self.jack_array.append(' ' * sc + self.current_token)
 
-            # VM Translate------------------------------------------------------------
-
+           # VM Translate------------------------------------------------------------
             # term:
             self.advance()
             self.compile_term(sc)
@@ -865,20 +987,26 @@ class JackCompiler:
         # If the current expression is master level then vm translation can be used
         if master_level:
             initialize_array = self.expression_array_vm_initialize(self.jack_array[expression_beginning:])
+            print(initialize_array)
             self.expression_vm_translator(initialize_array)
         # counting from other expression calls in the bigger picture
 
-    def expression_array_vm_initialize(self, jack_array, output=[]):
+    def expression_array_vm_initialize(self, jack_array):
         """Initialize the expression section of the token xml file for vm translation"""
-        token_holder = output
-
+        token_holder = []
         # This is where the filtering happens wherein unnecessary tags are ignored
-        for element in jack_array:
+        for i, element in enumerate(jack_array):
             current_expression = element.strip()
             if element.strip() == '<expression>':
                 token_holder.append((current_expression, 'n/a'))
 
             elif element.strip() == '</expression>':
+                token_holder.append((current_expression, 'n/a'))
+
+            elif element.strip() == '<expressionList>':
+                token_holder.append((current_expression, 'n/a'))
+
+            elif element.strip() == '</expressionList>':
                 token_holder.append((current_expression, 'n/a'))
 
             elif element.strip()[0:17] == '<integerConstant>':
@@ -887,46 +1015,143 @@ class JackCompiler:
             elif element.strip() == '<symbol> + </symbol>':
                 token_holder.append((current_expression[0:8], current_expression[9:-10]))
 
+            elif element.strip() == '<symbol> - </symbol>':
+                token_holder.append((current_expression[0:8], current_expression[9:-10]))
+
             elif element.strip() == '<symbol> * </symbol>':
+                token_holder.append((current_expression[0:8], current_expression[9:-10]))
+
+            elif element.strip() == '<symbol> / </symbol>':
+                token_holder.append((current_expression[0:8], current_expression[9:-10]))
+
+            elif element.strip() == '<symbol> ~ </symbol>':
                 token_holder.append((current_expression[0:8], current_expression[9:-10]))
 
             elif element.strip() == '<symbol> , </symbol>':
                 token_holder.append((current_expression[0:8], current_expression[9:-10]))
+
+            elif element.strip() == '<symbol> &gt; </symbol>':
+                token_holder.append((current_expression[0:8], current_expression[9:-10]))
+
+            elif element.strip() == '<symbol> = </symbol>':
+                token_holder.append((current_expression[0:8], current_expression[9:-10]))
+
+            elif element.strip() == '<symbol> &amp; </symbol>':
+                token_holder.append((current_expression[0:8], current_expression[9:-10]))
+
+            elif element.strip() == '<keyword> true </keyword>':
+                # If true the VM translator will add a not command after pushing constant 0
+                token_holder.append(('<boolean>', 'true'))
+
+            elif element.strip() == '<keyword> false </keyword>':
+                # If false the VM translator will never add a not command after pushing constant 0
+                token_holder.append(('<boolean>', 'false'))
+
+            # Expression is a variable to TUESDAY PAUL: VERIFY IF THE LOGIC HERE IS CORRECT VIA TEST CASES AND LECTURE
+            elif self.symbol_table.is_var_defined(element.strip()):
+                var_index = str(self.symbol_table.index_of(element.strip()))
+                var_kind = self.symbol_table.kind_of(element.strip())
+                token_holder.append((var_kind, var_index))
+
+            # Subroutine Call Memory.peek(
+            elif element.strip()[0:12] == '<identifier>':
+                if jack_array[i+1].strip() == '<symbol> . </symbol>' and jack_array[i+2].strip()[0:12] == '<identifier>':
+                    subroutine_name = element.strip()[13:-14] + '.' + jack_array[i+2].strip()[13:-14]
+                    token_holder.append(('<function>', subroutine_name))
 
         return token_holder
 
     def expression_vm_translator(self, exp_arr, arr_ind=0):
         """The official VM translator for Expressions"""
 
-        def evaluate_operator(op):
+        def is_symbol_operator(exp_tpl):
+            if (exp_tpl == ('<symbol>', '=') or exp_tpl == ('<symbol>', '+') or exp_tpl == ('<symbol>', '-') or
+                exp_tpl == ('<symbol>', '*') or exp_tpl == ('<symbol>', '/') or exp_tpl == ('<symbol>', '~') or
+                exp_tpl == ('<symbol>', '&gt;') or exp_tpl == ('<symbol>', '&lt;')):
+                return True
+            else:
+                return False
+
+        def evaluate_operator(op, neg=False):
             if op == '+':
                 self.write_arithmetic('ADD')
+            elif op == '-' and neg:
+                self.write_arithmetic('NEG')
+            elif op == '-' and not neg:
+                self.write_arithmetic('SUB')
+            elif op == '~':
+                self.write_arithmetic('NOT')
+            elif op == '&gt;':
+                 self.write_arithmetic('GT')
+            elif op == '&amp;':
+                self.write_arithmetic('AND')
+            elif op == '=':
+                self.write_arithmetic('EQ')
             elif op == '*':
                 self.write_call('Math.multiply', '2')
+            elif op == '/':
+                self.write_call('Math.divide', '2')
 
         # Expression is a Number
         if exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind+1][0] == '<integerConstant>' and exp_arr[arr_ind+2][0] == '</expression>':
             self.write_push('CONST', exp_arr[1][1])
 
+        # Expression is Local variable
+        elif exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind+1][0] == 'LOCAL' and exp_arr[arr_ind+2][0] == '</expression>':
+            self.write_push('LOCAL', exp_arr[arr_ind + 1][1])
+
+        # Expression is Argument variable
+        elif exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind+1][0] == 'ARGUMENT' and exp_arr[arr_ind+2][0] == '</expression>':
+            self.write_push('ARGUMENT', exp_arr[arr_ind + 1][1])
+
+        # Expression is a Boolean
+        elif exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind+1][0] == '<boolean>' and exp_arr[arr_ind+2][0] == '</expression>':
+            if exp_arr[arr_ind+1][1] == 'true':
+                self.write_push('CONST', '0')
+                self.write_arithmetic('NOT')
+            else:
+                self.write_push('CONST', '0')
+
         # Expression is Exp1 Op Exp2
         elif len(exp_arr) >= 3:
+
+            # Expression is compounded like: (~(position > 16)): Exp1 Exp2
+            if exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind+1][0] == '<expression>':
+                end_of_inner_exp = exp_arr.index(('</expression>', 'n/a'))
+                inner_exp = exp_arr[arr_ind+1:end_of_inner_exp+1]
+
+                self.expression_vm_translator(inner_exp)
+
+                outer_exp = [exp_arr[0]] + exp_arr[end_of_inner_exp+1:]
+                self.expression_vm_translator(outer_exp)
+
             # Exp1 Op Compound_Exp2: For cases like: 2 + (1 - 43)
-            if exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind+2][0] == '<symbol>' and exp_arr[arr_ind+3][0] == '<expression>':
+            # exp_arr[arr_ind + 1] is usually the integerConstant
+            elif (exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind+2][0] == '<symbol>' and
+                  (exp_arr[arr_ind+3][0] == '<expression>' or exp_arr[arr_ind+3] == ('<symbol>', '-'))):
                 # Expression 1
-                exp1 = exp_arr[arr_ind:2]
+                exp1 = exp_arr[arr_ind:2]  # :2 is the symbol
                 exp1.append(('</expression>', 'n/a'))
                 self.expression_vm_translator(exp1)
 
-                # Expression 2
-                compound_exp2 = exp_arr[arr_ind+3:-1]
-                self.expression_vm_translator(compound_exp2)
+                # Expression 2 is an expression
+                if exp_arr[arr_ind+3][0] == '<expression>':
+                    compound_exp2 = exp_arr[arr_ind+3:-1]
+                    print(compound_exp2)
+                    self.expression_vm_translator(compound_exp2)
+
+                elif exp_arr[arr_ind+3] == ('<symbol>', '-'):
+                    compound_exp2 = [('<expression>', 'n/a')] + exp_arr[arr_ind+3:-1] + [('</expression>', 'n/a')]
+                    print(compound_exp2)
+                    self.expression_vm_translator(compound_exp2)
 
                 # output "op"
                 op = exp_arr[arr_ind + 2][1]
                 evaluate_operator(op)
 
-            # Exp1 Op Exp2
-            elif exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind+2][0] == '<symbol>' and exp_arr[arr_ind+3][0] == '<integerConstant>':
+        # Exp1 Op Exp2
+            # Mathematical Operation: exp_arr[arr_ind + 1] is usually the integerConstant and arr_ind+3 also:
+            elif exp_arr[arr_ind][0] == '<expression>' and is_symbol_operator(exp_arr[arr_ind+2]) and exp_arr[arr_ind+4][0] == '</expression>':
                 # Expression 1
                 exp1 = exp_arr[arr_ind:2] + [('</expression>', 'n/a')]
                 self.expression_vm_translator(exp1)
@@ -938,6 +1163,83 @@ class JackCompiler:
                 # output 'op'
                 op = exp_arr[arr_ind + 2][1]
                 evaluate_operator(op)
+
+            # Logical Operator
+            elif exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind+2] == ('<symbol>', '&amp;'):
+                # Expression 1
+                exp1 = exp_arr[arr_ind:2] + [('</expression>', 'n/a')]
+                self.expression_vm_translator(exp1)
+
+                # Expression 2
+                exp2 = [('<expression>', 'n/a')] + exp_arr[arr_ind + 3:]
+                self.expression_vm_translator(exp2)
+
+                # output 'op'
+                op = exp_arr[arr_ind + 2][1]
+                evaluate_operator(op)
+
+            # Expression is Compound: Op (~) Exp or Op (-) Exp
+            elif (exp_arr[arr_ind + 1] == ('<symbol>', '~') or exp_arr[arr_ind + 1] == ('<symbol>', '-')) and exp_arr[arr_ind + 2][0] == '<expression>':
+                # Expression
+                exp = exp_arr[arr_ind + 2:-1]
+                self.expression_vm_translator(exp)
+
+                # output 'op'
+                op = exp_arr[arr_ind+1][1]
+
+                evaluate_operator(op, True)
+
+            # Expression is Op IntegerExpression
+            elif is_symbol_operator(exp_arr[arr_ind + 1]) and exp_arr[arr_ind + 2][0] == '<integerConstant>': #and exp_arr[arr_ind + 3][0] == '</expression>':
+                # Expression
+                exp1 = [('<expression>', 'n/a')] + [exp_arr[arr_ind + 2]] + [('</expression>', 'n/a')]
+                self.expression_vm_translator(exp1)
+
+                # output 'op'
+                op = exp_arr[arr_ind+1][1]
+                evaluate_operator(op, True)
+
+                # If the right side is an integer expression
+                if exp_arr[arr_ind+3][0] == '<symbol>' and exp_arr[arr_ind+4][0] == '<integerConstant>':
+                    exp2 = [('<expression>', 'n/a')] + exp_arr[arr_ind + 4:]
+                    self.expression_vm_translator(exp2)
+
+                # output 'op'
+                op = exp_arr[arr_ind+3][1]
+                evaluate_operator(op)
+
+            # Expression is an and function logical operator to something
+            elif exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind + 1][0] == '<function>':
+                if exp_arr[arr_ind + 2][0] == '<expressionList>':
+                    end_of_exp = exp_arr[arr_ind+2:].index(('</expressionList>', 'n/a')) + 2
+                    exp = exp_arr[arr_ind+2:end_of_exp+1]
+
+                    self.expression_vm_translator(exp)
+                    exp_count = exp.count(('<expression>', 'n/a'))
+                    self.write_call(exp_arr[1][1], str(exp_count))
+
+            # Expression is Exp, Exp, Exp,....
+            elif exp_arr[arr_ind][0] == '<expressionList>' and exp_arr[-1][0] == '</expressionList>':
+                exp = exp_arr[1:-1]
+                if ('<symbol>', ',') in exp:
+                    comma_index = exp.index(('<symbol>', ','))
+                    exp1 = exp[0:comma_index]
+                    exp2 = exp[comma_index + 1:]
+                    multi_exp = True
+                else:
+                    exp1 = exp
+                    multi_exp = False
+
+                self.expression_vm_translator(exp1)
+
+                if multi_exp:
+                    if ('<symbol>', ',') in exp2:
+                        exp2 = [('<expressionList>', 'n/a')] + exp2 + [('</expressionList>', 'n/a')]
+                        self.expression_vm_translator(exp2)
+                    else:
+                        self.expression_vm_translator(exp2)
+                        multi_exp = False
+
 
     def token_part_viewer(self, jack_array, array_index=0):
         """View the current jack array: use expression_beginning for array_index"""
@@ -991,7 +1293,7 @@ class JackCompiler:
         # (className|varName).SubroutineName(expressionList) or it can be a subroutineName(ExpressionList)
         elif (self.symbol_table.is_var_defined(self.current_token) or self.check_token(1, '<symbol> . </symbol>')
               or (self.current_token[0:12] == '<identifier>' and self.check_token(1, '<symbol> ( </symbol>'))):
-            self.og_compile_subroutine_call(sc)
+            self.og_compile_subroutine_call(sc, False)
 
         # the term is an (expression) -----------------------------------------
         elif self.current_token == '<symbol> ( </symbol>':
@@ -1041,9 +1343,8 @@ class JackCompiler:
             # ( symbol
             self.advance()
             self.jack_array.append(' ' * c_sc + self.current_token)
-
             # expressionList ------------------------------------
-            exp_count = self.call_expression_list(c_sc, subroutine_name)
+            exp_count = self.call_expression_list(c_sc, subroutine_name, master_level)
             # /expressionList-----------------------------------
 
             # ) symbol
@@ -1066,68 +1367,16 @@ class JackCompiler:
             # ( : <symbol> ( </symbol>
             self.advance()
             self.jack_array.append(' ' * c_sc + self.current_token)
-
             # expressionList ------------------------------------
-            exp_count = self.call_expression_list(c_sc, subroutine_name)
+            exp_count = self.call_expression_list(c_sc, subroutine_name, master_level)
             # /expressionList-----------------------------------
 
             # ) : <symbol> ) </symbol>
             self.advance()
             self.jack_array.append(' ' * c_sc + self.current_token)
 
-
-            # Note for July 9 Paul: Basically try to apply the logic you used here in Subroutine Call to
-            # all the routines
-
+            return (subroutine_name, exp_count)
     # End of Subroutine Call-----------------------------------
-
-    def call_expression_list(self, c_sc, subroutine_name=''):
-        # Holds the exp_count coming from expression_list
-        exp_count_holder = 0
-
-        if self.check_token(1, '<symbol> ) </symbol>'):
-            exp_count_holder = self.compile_expression_list(c_sc, subroutine_name)
-        else:
-            self.advance()
-            exp_count_holder = self.compile_expression_list(c_sc, subroutine_name)
-
-        return str(exp_count_holder)
-
-    def compile_expression_list(self, c_sc=0, subroutine_name=''):
-        self.jack_array.append(' ' * c_sc + '<expressionList>')  # <expressionList>
-        sc = c_sc + 2
-
-        # Counter for the number of expressions
-        exp_count = 0
-
-        # The caller of this method is always choosing between entering '(' or the expression
-        # token itself. When current token is ( then there is no expression
-
-        # There is an expression
-        # NOte this expression list stands for f(exp1, exp2, exp3, etc)
-        if not self.check_token(0, '<symbol> ( </symbol>') or not self.check_token(1, '<symbol> ) </symbol>'):
-            # expression Initial
-            self.compile_expression(sc)
-            exp_count += 1
-
-            # expression recursion
-            while self.check_token(1, '<symbol> , </symbol>'):
-                # , : <symbol> , </symbol>
-                self.advance()
-                self.jack_array.append(' ' * sc + self.current_token)
-
-                # expression
-                self.advance()
-                self.compile_expression(sc)
-                exp_count += 1
-
-        # End of expression List
-        self.jack_array.append(' ' * c_sc + '</expressionList>')  # </expressionList>
-
-        self.write_call(subroutine_name, str(exp_count))
-
-        return exp_count
-        # End of Expression List-----------------------------------------------------------
 
     def is_token_class(self):
         for class_name in self.class_names:
@@ -1153,14 +1402,38 @@ class JackCompiler:
     def write_push(self, segment, index):
         if segment == 'CONST':
             self.vm_table.append('push constant ' + index)
+        elif segment == 'LOCAL':
+            self.vm_table.append('push local ' + index)
+        elif segment == 'ARGUMENT':
+            self.vm_table.append('push argument ' + index)
 
     def write_pop(self, segment, index):
         if segment == 'TEMP':
             self.vm_table.append('pop temp ' + index)
+        elif segment == 'LOCAL':
+            self.vm_table.append('pop local ' + index)
+        elif segment == 'ARGUMENT':
+            self.vm_table.append('pop argument ' + index)
+
+    # !!! YOU STILL HAVE TO FIX the 2 + -(2+200) epxression the '-expression'
 
     def write_arithmetic(self, command):
         if command == 'ADD':
             self.vm_table.append('add')
+        elif command == 'NEG':
+            self.vm_table.append('neg')
+        elif command == 'SUB':
+            self.vm_table.append('sub')
+        elif command == 'NOT':
+            self.vm_table.append('not')
+        elif command == 'GT':
+            self.vm_table.append('gt')
+        elif command == 'AND':
+            self.vm_table.append('and')
+        elif command == 'EQ':
+            self.vm_table.append('eq')
+        else:
+            self.vm_table.append('NO COMMAND FOUND')
 
     def write_function(self, name, nLocals):
         self.vm_table.append('function ' + name + ' ' + nLocals)
@@ -1171,8 +1444,20 @@ class JackCompiler:
     def write_return(self):
         self.vm_table.append('return')
 
+    def write_label(self, label):
+        self.vm_table.append('label ' + label)
+
+    def write_if(self, label):
+        self.vm_table.append('if-goto ' + label)
+
+    def write_goto(self, label):
+        self.vm_table.append('goto ' + label)
+
     def get_jack_file(self):
         return self.jack_array
+
+    def get_vm_file(self):
+        return self.vm_table
 
     def make_jack_file(self, f_file_name=''):
         if f_file_name == '':
@@ -1183,6 +1468,16 @@ class JackCompiler:
         file = open(folder_directory + '/' + file_name + '.xml', 'w')
         for token_element in self.jack_array:
             file.write(token_element + '\n')
+
+    def make_vm_file(self, f_file_name=''):
+        if f_file_name == '':
+            file_name = self.token_file_name + 'VMCompiled'
+        else:
+            file_name = f_file_name
+
+        file = open(folder_directory + '/' + file_name + '.xml', 'w')
+        for vm_element in self.vm_table:
+            file.write(vm_element + '\n')
 
 
 class SymbolTable:
@@ -1195,12 +1490,16 @@ class SymbolTable:
         self.count_ARG = 0
         self.count_VAR = 0
 
-    def start_subroutine(self, mode='', f_class_entry=''):
+    def start_subroutine(self, mode='', f_class_entry='', is_method=False):
         if mode == 'print':
             print('Subroutine-Table------------------------------------------------------')
             [print(table_entry) for table_entry in self.subroutine_table]
+        self.count_ARG = 0
+        self.count_VAR = 0
         self.subroutine_table = []
-        self.define(f_class_entry[0], f_class_entry[1], f_class_entry[2])
+
+        if is_method:
+            self.define(f_class_entry[0], f_class_entry[1], f_class_entry[2])
 
     def define(self, f_name, f_type, f_kind):
         if f_kind == '<keyword> static </keyword>':
@@ -1212,7 +1511,7 @@ class SymbolTable:
         elif f_kind == 'ARGUMENT':   # Special Case: the word argument is hard-coded
             self.subroutine_table.append((f_name, f_type, f_kind, self.count_ARG))
             self.count_ARG += 1
-        elif f_kind == '<keyword> var </keyword>':
+        elif f_kind == 'LOCAL':
             self.subroutine_table.append((f_name, f_type, f_kind, self.count_VAR))
             self.count_VAR += 1
 
@@ -1223,7 +1522,7 @@ class SymbolTable:
             return self.count_FIELD
         elif f_kind == 'ARGUMENT':
             return self.count_ARG
-        elif f_kind == '<keyword> var </keyword>':
+        elif f_kind == 'LOCAL':
             return self.count_VAR
 
     def kind_of(self, f_name):
@@ -1255,12 +1554,12 @@ class SymbolTable:
         return 'NONE'
 
     def index_of(self, f_name):
-        # Checks the subroutine table if the variable name is in there
+        # Checks the subroutine table what is the index of the token
         for entry in self.subroutine_table:
             if entry[0] == f_name:
                 return entry[3]
 
-        # Checks the class table if the variable name is in there
+        # Checks the subroutine table what is the index of the token
         for entry in self.class_table:
             if entry[0] == f_name:
                 return entry[3]
@@ -1328,6 +1627,13 @@ def jack_tester():
 
     jack_array = JackCompiler(token_tuple_array[0])
     jack_array.make_jack_file()
+    jack_array.make_vm_file()
+
+    print("VM TRANSLATION------------------------------------------")
+    [print(vm_code) for vm_code in jack_array.get_vm_file()]
+
+
+
 
 #jack_translate()
 jack_tester()
