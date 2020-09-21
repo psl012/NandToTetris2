@@ -1,7 +1,7 @@
 import os
 import glob
 
-folder_directory = "C:/Users/lacap/Desktop/Paul-Der/Open Source CompSci/nand2tetris/projects/11/CompileFolder/Average"
+folder_directory = "C:/Users/Paul/Documents/Open Source Society for Computer Science (OSSU)/nand2tetris/projects/11/CompileFolder/ComplexArrays"
 jack_file_directory = folder_directory + "/*.jack"
 xml_directory = folder_directory + "/*.xml"
 
@@ -56,7 +56,6 @@ class JackTokenizer:
 
         # Initializes the jack_array
         self.jack_array_initializer(jack_array[0])
-
         # Tokenize commands
         self.token_array = ['<tokens>']
         while self.has_more_tokens():
@@ -86,6 +85,7 @@ class JackTokenizer:
             else:
                 token_array = line.split()
 
+
             for token in token_array:
                 if not self.is_comment_mode:
                     if token == '/**':
@@ -101,12 +101,14 @@ class JackTokenizer:
         for token in jack_array_no_comments:
             self.jack_token_fixer(token)
 
+
     def token_string_fixer(self, line, current_array=['reset123']):
         if current_array == ['reset123']:
             token_array_holder = []
         else:
             token_array_holder = current_array
         if '"' in line:
+            print(line)
             left_symbol_index = line.index('"')
             left_lines = line[0:left_symbol_index]
 
@@ -200,6 +202,7 @@ class JackTokenizer:
         elif len(token) == 1:
             self.jack_array_token_elements.append(token)
 
+
     def token_fixer_rec_function(self, symbol, token):
         if symbol in token:
             symbol_index = token.index(symbol)
@@ -251,9 +254,11 @@ class JackTokenizer:
         # string_constant Special case: will use self.advance to adjust for not using '"'
         elif element == '"':
             self.advance()
-            string_element = self.current_token
+            string_element = ""
+            while not self.current_token == '"':
+                string_element += self.current_token
+                self.advance()
             self.token_array.append('<stringConstant> ' + string_element + ' </stringConstant>')
-            self.advance()
 
         # identifier
         elif not element[0].isdigit():
@@ -338,6 +343,7 @@ class JackCompiler:
         self.if_count = -1
         self.if_count_true = -1
         self.if_count_false = -1
+        self.expression_array_stage = 0
 
         # Starts the compilation and makes sure the first token is a class
         if self.has_more_tokens():
@@ -1062,6 +1068,7 @@ class JackCompiler:
         # If the current expression is master level then vm translation can be used
         if master_level:
             initialize_array = self.expression_array_vm_initialize(self.jack_array[expression_beginning:])
+            print('--------------------------------------------------------')
             print(initialize_array)
             self.expression_vm_translator(initialize_array)
         # counting from other expression calls in the bigger picture
@@ -1069,7 +1076,8 @@ class JackCompiler:
     def expression_array_vm_initialize(self, jack_array):
         """Initialize the expression section of the token xml file for vm translation"""
         token_holder = []
-       # print(jack_array)
+        array_variable = False
+     #   print(jack_array)
         # This is where the filtering happens wherein unnecessary tags are ignored
         for i, element in enumerate(jack_array):
             current_expression = element.strip()
@@ -1106,6 +1114,9 @@ class JackCompiler:
             elif element.strip() == '<symbol> , </symbol>':
                 token_holder.append((current_expression[0:8], current_expression[9:-10]))
 
+            elif element.strip() == '<symbol> | </symbol>':
+                token_holder.append((current_expression[0:8], current_expression[9:-10]))
+
             elif element.strip() == '<symbol> &gt; </symbol>':
                 token_holder.append((current_expression[0:8], current_expression[9:-10]))
 
@@ -1118,6 +1129,10 @@ class JackCompiler:
             elif element.strip() == '<symbol> &amp; </symbol>':
                 token_holder.append((current_expression[0:8], current_expression[9:-10]))
 
+            elif element.strip() == '<keyword> null </keyword>':
+                # null pretty much means constant 0
+                token_holder.append(('<integerConstant>', '0'))
+
             elif element.strip() == '<keyword> true </keyword>':
                 # If true the VM translator will add a not command after pushing constant 0
                 token_holder.append(('<boolean>', 'true'))
@@ -1129,6 +1144,15 @@ class JackCompiler:
             elif element.strip()[0:16] == '<stringConstant>':
                 token_holder.append(('<stringConstant>', element.strip()[17:-18]))
 
+            # Subroutine Call Memory.peek(
+            elif element.strip()[0:12] == '<identifier>' and jack_array[i+1].strip() == '<symbol> . </symbol>' and jack_array[i+2].strip()[0:12] == '<identifier>' :
+                if self.symbol_table.is_var_defined(element.strip()):
+                    subroutine_name = self.symbol_table.type_of(element.strip())[13:-14] + '.' + jack_array[i + 2].strip()[13:-14]
+                    token_holder.append(('<fieldFunction>', subroutine_name))
+                else:
+                    subroutine_name = element.strip()[13:-14] + '.' + jack_array[i+2].strip()[13:-14]
+                    token_holder.append(('<function>', subroutine_name))
+
             # Expression is a variable to TUESDAY PAUL: VERIFY IF THE LOGIC HERE IS CORRECT VIA TEST CASES AND LECTURE
             elif self.symbol_table.is_var_defined(element.strip()):
                 var_index = str(self.symbol_table.index_of(element.strip()))
@@ -1138,12 +1162,19 @@ class JackCompiler:
                     token_holder.append(('<POINTER>', '0'))
                 else:
                     token_holder.append((var_kind, var_index))
+                    if jack_array[i+1].strip() == '<symbol> [ </symbol>':
+                        array_variable = True
+                        self.expression_array_stage += 1
 
-            # Subroutine Call Memory.peek(
-            elif element.strip()[0:12] == '<identifier>':
-                if jack_array[i+1].strip() == '<symbol> . </symbol>' and jack_array[i+2].strip()[0:12] == '<identifier>':
-                    subroutine_name = element.strip()[13:-14] + '.' + jack_array[i+2].strip()[13:-14]
-                    token_holder.append(('<function>', subroutine_name))
+            # array variable handling
+            if array_variable:
+                if element.strip() == '<symbol> [ </symbol>':
+                    token_holder.append(('ARRAY', 'BEGIN'))
+                elif element.strip() == '<symbol> ] </symbol>':
+                    token_holder.append(('ARRAY', 'END'))
+                    self.expression_array_stage -= 1
+                    if self.expression_array_stage <= 0:
+                        array_variable = False
 
         return token_holder
 
@@ -1153,7 +1184,7 @@ class JackCompiler:
         def is_symbol_operator(exp_tpl):
             if (exp_tpl == ('<symbol>', '=') or exp_tpl == ('<symbol>', '+') or exp_tpl == ('<symbol>', '-') or
                 exp_tpl == ('<symbol>', '*') or exp_tpl == ('<symbol>', '/') or exp_tpl == ('<symbol>', '~') or
-                exp_tpl == ('<symbol>', '&gt;') or exp_tpl == ('<symbol>', '&lt;') or exp_tpl == ('<symbol>', '&amp;')):
+                exp_tpl == ('<symbol>', '|') or exp_tpl == ('<symbol>', '&gt;') or exp_tpl == ('<symbol>', '&lt;') or exp_tpl == ('<symbol>', '&amp;')):
                 return True
             else:
                 return False
@@ -1171,6 +1202,8 @@ class JackCompiler:
                  self.write_arithmetic('GT')
             elif op == '&lt;':
                  self.write_arithmetic('LT')
+            elif op == '|':
+                self.write_arithmetic('OR')
             elif op == '&amp;':
                 self.write_arithmetic('AND')
             elif op == '=':
@@ -1180,8 +1213,8 @@ class JackCompiler:
             elif op == '/':
                 self.write_call('Math.divide', '2')
 
-        # Expression is a Number
         if len(exp_arr) <= 3:
+            # Expression is a Number
             if exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind+1][0] == '<integerConstant>' and exp_arr[arr_ind+2][0] == '</expression>':
                 self.write_push('CONST', exp_arr[1][1])
 
@@ -1203,9 +1236,18 @@ class JackCompiler:
             elif exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind+1][0] == 'LOCAL' and exp_arr[arr_ind+2][0] == '</expression>':
                 self.write_push('LOCAL', exp_arr[arr_ind + 1][1])
 
+                # Evaluate the expression if a symbol is attached to it
+                op1 = exp_arr[0][1]
+                evaluate_operator(op1)
+                # !!! DOUBLE CHECK THIS
+
             # Expression is Argument variable
             elif exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind+1][0] == 'ARGUMENT' and exp_arr[arr_ind+2][0] == '</expression>':
                 self.write_push('ARGUMENT', exp_arr[arr_ind + 1][1])
+
+            # Expression is a Static Variable: Yeah the <keyword> is required
+            elif exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind+1][0] == '<keyword> static </keyword>' and exp_arr[arr_ind+2][0] == '</expression>':
+                self.write_push('<keyword> static </keyword>', exp_arr[1][1])
 
             # Expression is a Boolean
             elif exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind+1][0] == '<boolean>' and exp_arr[arr_ind+2][0] == '</expression>':
@@ -1226,7 +1268,9 @@ class JackCompiler:
                     self.write_push('CONST', str(ord(str_char)))
                     self.write_call('String.appendChar', '2')
 
-               # self.write_push('LOCAL', exp_arr[arr_ind + 1][1])
+            # Expression is just an operator
+            elif exp_arr[arr_ind][0] == '<expression>' and (not exp_arr[arr_ind][1] == 'n/a') and exp_arr[arr_ind+1] == ('</expression>', 'n/a'):
+                evaluate_operator(exp_arr[arr_ind][1])
 
         # Expression is Exp1 Op Exp2
         elif len(exp_arr) > 3:
@@ -1235,20 +1279,32 @@ class JackCompiler:
             if exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind+1][0] == '<expression>':
                 print('full exp----------------------------')
                 print(exp_arr)
-                end_of_inner_exp = exp_arr.index(('</expression>', 'n/a'))
-                inner_exp = exp_arr[arr_ind+1:end_of_inner_exp+1]
+
+                temp = exp_arr[1:-1]
+                end_of_inner_exp = len(temp)
+                exp_counter = 0
+                for i, e in enumerate(temp):
+                    if e[0] == '<expression>':
+                        exp_counter += 1
+                    elif e[0] == '</expression>':
+                        exp_counter -= 1
+                        if exp_counter <= 0:
+                            end_of_inner_exp = i
+                            break
+
+                inner_exp = [exp_arr[0]] + temp[arr_ind+1:end_of_inner_exp+1]
                 print('inner exp--------------------------')
                 print(inner_exp)
                 self.expression_vm_translator(inner_exp)
 
-                outer_exp = [exp_arr[0]] + exp_arr[end_of_inner_exp+1:]
-                print('outer exp----------------------')
+                outer_exp = [exp_arr[0]] + temp[end_of_inner_exp+1:] + [exp_arr[len(exp_arr)-1]]
+                print('outer exp--------------------------')
                 print(outer_exp)
 
                 # A case wherein the first token is a symbol operator
                 if len(outer_exp) > 1:
                     if is_symbol_operator(outer_exp[1]):
-                        print('hello')
+                        print('inner_exp2-------------------------')
                         inner_exp2 = [('<expression>', outer_exp[1][1])] + outer_exp[2:]
                         print(inner_exp2)
                         self.expression_vm_translator(inner_exp2)
@@ -1258,10 +1314,52 @@ class JackCompiler:
 
                     # [('<expression>', 'n/a'), ('<integerConstant>', '254'), ('</expression>', 'n/a'), LESS THAN MUST COME BEFORE &AMP end_of_inner_exp = exp_arr.index(('</expression>', 'n/a'))
 
+            # Exp is an array
+            elif exp_arr[arr_ind+1][0] == 'LOCAL' and exp_arr[arr_ind+2] == ('ARRAY', 'BEGIN'):
+                array_end = len(exp_arr)
+                array_counter = 0
+                for i, e in enumerate(exp_arr):
+                    if e == ('ARRAY', 'BEGIN'):
+                        array_counter += 1
+                    elif e == ('ARRAY', 'END'):
+                        array_counter -= 1
+                        if array_counter <= 0:
+                            array_end = i
+                            break
+
+                inner_exp = exp_arr[arr_ind+3:array_end]
+                print('inner_exp------------')
+                print(inner_exp)
+                self.expression_vm_translator(inner_exp)
+                # PUSH LOCAL 1 the array variable
+                self.write_push(exp_arr[arr_ind+1][0], exp_arr[arr_ind+1][1])
+
+                evaluate_operator('+')
+
+                # Simon's Says tips
+                self.write_pop('POINTER', '1')
+                self.write_push('THAT', '0')
+
+                if array_end + 2 < len(exp_arr):
+                    exp_epilogue = exp_arr[array_end+1]
+                    if exp_epilogue[0] == '<symbol>':
+                        outer_exp = [('<expression>', exp_epilogue[1])] + exp_arr[array_end+2:]
+                        print('outer_exp-------------------------------------------')
+                        print(outer_exp)
+
+                        self.expression_vm_translator(outer_exp)
+
+                else:
+                    evaluate_operator(exp_arr[0][1])
+
+                # Check this on Tuesday and EXTEND
+
             # Exp1 Op Compound_Exp2: For cases like: 2 + (1 - 43)
             # exp_arr[arr_ind + 1] is usually the integerConstant
             elif (exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind+2][0] == '<symbol>' and
-                  (exp_arr[arr_ind+3][0] == '<expression>' or exp_arr[arr_ind+3] == ('<symbol>', '-'))):
+                  (exp_arr[arr_ind+3][0] == '<expression>' or exp_arr[arr_ind+3] == ('<symbol>', '-') or
+                   (exp_arr[arr_ind+3][0] == 'LOCAL' and exp_arr[arr_ind+4] == ('ARRAY', 'BEGIN')))):
+
                 # Expression 1
                 exp1 = exp_arr[arr_ind:2]  # :2 is the symbol
                 exp1.append(('</expression>', 'n/a'))
@@ -1278,11 +1376,17 @@ class JackCompiler:
                     print(compound_exp2)
                     self.expression_vm_translator(compound_exp2)
 
+                # or an array
+                elif exp_arr[arr_ind+3][0] == 'LOCAL' and exp_arr[arr_ind+4] == ('ARRAY', 'BEGIN'):
+                    compound_exp2 = [('<expression>', 'n/a')] + exp_arr[arr_ind+3:-1] + [('</expression>', 'n/a')]
+                    print(compound_exp2)
+                    self.expression_vm_translator(compound_exp2)
+
                 # output "op"
                 op = exp_arr[arr_ind + 2][1]
                 evaluate_operator(op)
 
-            # Compound_Exp1 Op Compound_Exp2: For cases like: 2 + (1 - 43)
+            # Compound_Exp1 Op Compound_Exp2:
             # exp_arr[arr_ind + 1] is usually the integerConstant
             elif (exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind + 2][0] == '</expression>' and
                     exp_arr[arr_ind + 3] == ('<symbol>', '&amp;')):
@@ -1309,7 +1413,8 @@ class JackCompiler:
             # Mathematical Operation: exp_arr[arr_ind + 1] is usually the integerConstant and arr_ind+3 also:
             elif exp_arr[arr_ind][0] == '<expression>' and is_symbol_operator(exp_arr[arr_ind+2]) and exp_arr[arr_ind+4][0] == '</expression>':
                 # Expression 1
-                exp1 = exp_arr[arr_ind:2] + [('</expression>', 'n/a')]
+                exp1 = [('<expression>', 'n/a')] + exp_arr[arr_ind+1:2] + [('</expression>', 'n/a')]
+                print(exp1)
                 self.expression_vm_translator(exp1)
 
                 # Expression 2
@@ -1345,8 +1450,9 @@ class JackCompiler:
 
                 evaluate_operator(op, True)
 
-            # Expression is Op IntegerExpression
-            elif is_symbol_operator(exp_arr[arr_ind + 1]) and (exp_arr[arr_ind + 2][0] == '<integerConstant>' or exp_arr[arr_ind + 2][0] == 'LOCAL'): #and exp_arr[arr_ind + 3][0] == '</expression>':
+            # Expression is Op IntegerExpression/LocalVariable/FieldVariable
+            elif is_symbol_operator(exp_arr[arr_ind + 1]) and \
+                    (exp_arr[arr_ind + 2][0] == '<integerConstant>' or exp_arr[arr_ind + 2][0] == 'LOCAL' or '<keyword> field </keyword>'): #and exp_arr[arr_ind + 3][0] == '</expression>':
                 # Expression
                 exp1 = [('<expression>', 'n/a')] + [exp_arr[arr_ind + 2]] + [('</expression>', 'n/a')]
                 self.expression_vm_translator(exp1)
@@ -1364,15 +1470,26 @@ class JackCompiler:
                 op = exp_arr[arr_ind+3][1]
                 evaluate_operator(op)
 
-            # Expression is an and function logical operator to something
-            elif exp_arr[arr_ind][0] == '<expression>' and exp_arr[arr_ind + 1][0] == '<function>':
+            # Expression is an and function or a FieldFunction logical operator to something
+            elif exp_arr[arr_ind][0] == '<expression>' and (exp_arr[arr_ind + 1][0] == '<function>' or exp_arr[arr_ind + 1][0] == '<fieldFunction>'):
                 if exp_arr[arr_ind + 2][0] == '<expressionList>':
                     end_of_exp = exp_arr[arr_ind+2:].index(('</expressionList>', 'n/a')) + 2
                     exp = exp_arr[arr_ind+2:end_of_exp+1]
 
                     self.expression_vm_translator(exp)
-                    exp_count = exp.count(('<expression>', 'n/a'))
+
+                    # Count the number of list and see if "this" needs to be included
+                    if exp_arr[arr_ind + 1][0] == '<fieldFunction>':
+                        exp_count = exp.count(('<expression>', 'n/a')) + 1
+                    else:
+                        exp_count = exp.count(('<expression>', 'n/a'))
+
                     self.write_call(exp_arr[1][1], str(exp_count))
+
+                    # Evaluate the expression if a symbol is attached to it
+                    op1 = exp_arr[0][1]
+                    evaluate_operator(op1)
+                    # !!! DOUBLE CHECK THIS
 
             # Expression is Exp, Exp, Exp,....
             elif exp_arr[arr_ind][0] == '<expressionList>' and exp_arr[-1][0] == '</expressionList>':
@@ -1511,6 +1628,8 @@ class JackCompiler:
             self.advance()
             self.jack_array.append(' ' * c_sc + self.current_token)
 
+            self.write_push('POINTER', '0')
+
             # expressionList ------------------------------------
             exp_count = int(self.call_expression_list(c_sc, subroutine_name, master_level))
             # /expressionList-----------------------------------
@@ -1524,7 +1643,7 @@ class JackCompiler:
             exp_count += 1
             exp_count = str(exp_count)
 
-            self.write_push('POINTER', '0')
+           # self.write_push('POINTER', '0')
 
         else:
             # . : <symbol> . </symbol>
@@ -1585,6 +1704,8 @@ class JackCompiler:
             self.vm_table.append('push pointer ' + index)
         elif segment == '<keyword> field </keyword>':
             self.vm_table.append('push this ' + index)
+        elif segment == '<keyword> static </keyword>':
+            self.vm_table.append('push static ' + index)
         elif segment == 'THAT':
             self.vm_table.append('push that ' + index)
         elif segment == 'TEMP':
@@ -1603,6 +1724,8 @@ class JackCompiler:
             self.vm_table.append('pop pointer ' + index)
         elif segment == '<keyword> field </keyword>':
             self.vm_table.append('pop this ' + index)
+        elif segment == '<keyword> static </keyword>':
+            self.vm_table.append('pop static ' + index)
         elif segment == 'THAT':
             self.vm_table.append('pop that ' + index)
         else:
@@ -1623,6 +1746,8 @@ class JackCompiler:
             self.vm_table.append('lt')
         elif command == 'AND':
             self.vm_table.append('and')
+        elif command == 'OR':
+            self.vm_table.append('or')
         elif command == 'EQ':
             self.vm_table.append('eq')
         else:
@@ -1815,14 +1940,16 @@ def jack_translate():
     for tuple_element in token_tuple_array:
         jack_array = JackCompiler(tuple_element)
         jack_array.make_jack_file()
+        jack_array.make_vm_file()
 
 
 def jack_tester():
     for tuple_element in jack_arrays:
         token_array = JackTokenizer(tuple_element)
         token_tuple_array.append(token_array.get_token_filename_tuple())
+        token_array.make_token_file('tester')
 
-    jack_array = JackCompiler(token_tuple_array[0])
+    jack_array = JackCompiler(token_tuple_array[3])
     jack_array.make_jack_file()
     jack_array.make_vm_file()
 
@@ -1832,5 +1959,5 @@ def jack_tester():
 
 
 
-#jack_translate()
-jack_tester()
+jack_translate()
+#jack_tester()
